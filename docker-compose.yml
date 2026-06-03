@@ -77,7 +77,6 @@ services:
       - ./frontend/.env
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://api:8000}
-      - NEXT_PUBLIC_API_KEY=${NEXT_PUBLIC_API_KEY}
       - NODE_ENV=${NODE_ENV:-development}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
