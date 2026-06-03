@@ -1,0 +1,19 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short"
+]
+filterwarnings = [
+    "ignore:'crypt' is deprecated:DeprecationWarning:passlib.utils",
+    "ignore:Can't sort tables for DROP:sqlalchemy.exc.SAWarning"
+]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests",
+    "auth: Authentication related tests"
+]

@@ -1,0 +1,23 @@
+# Production override file
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+services:
+  frontend:
+    build:
+      target: runner
+    environment:
+      - NODE_ENV=production
+    volumes:
+      # Remove source code mounting for production
+      - /app/node_modules
+      - /app/.next
+
+  api:
+    volumes:
+      # Remove source code mounting for production
+      - pip_cache:/root/.cache/pip
+
+  worker:
+    volumes:
+      # Remove source code mounting for production
+      - pip_cache:/root/.cache/pip

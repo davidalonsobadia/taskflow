@@ -1,0 +1,16 @@
+# TaskFlow Backend Caddy Configuration
+
+# For local development with custom domain
+localhost {
+    reverse_proxy web:8000
+}
+
+# For production - replace with your domain
+# api.yourdomain.com {
+#     reverse_proxy web:8000
+# }
+
+# Simple HTTP reverse proxy
+:80 {
+    reverse_proxy web:8000
+}

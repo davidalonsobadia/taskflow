@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to {{ app_name }}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background-color: #f4f4f4;
+      margin: 0;
+      padding: 0;
+    }
+    .container {
+      max-width: 600px;
+      margin: 40px auto;
+      background-color: #ffffff;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+      padding: 40px 20px;
+      text-align: center;
+      color: #ffffff;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 32px;
+      font-weight: 600;
+    }
+    .content {
+      padding: 40px 30px;
+    }
+    .content p {
+      margin: 0 0 20px;
+      font-size: 16px;
+      color: #555;
+    }
+    .button {
+      display: inline-block;
+      padding: 14px 32px;
+      margin: 20px 0;
+      background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+      color: #ffffff !important;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 16px;
+      text-align: center;
+      transition: transform 0.2s;
+    }
+    .button:hover {
+      transform: translateY(-2px);
+    }
+    .feature-list {
+      background-color: #f8f9fa;
+      padding: 20px;
+      border-radius: 6px;
+      margin: 20px 0;
+    }
+    .feature-list h3 {
+      margin: 0 0 15px;
+      color: #333;
+      font-size: 18px;
+    }
+    .feature-list ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+    .feature-list li {
+      margin: 8px 0;
+      color: #555;
+    }
+    .footer {
+      background-color: #f8f9fa;
+      padding: 20px 30px;
+      text-align: center;
+      font-size: 14px;
+      color: #888;
+      border-top: 1px solid #e9ecef;
+    }
+    .footer a {
+      color: #4facfe;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🎉 Welcome to {{ app_name }}!</h1>
+    </div>
+    
+    <div class="content">
+      <p>Hi {{ name }},</p>
+      
+      <p>
+        <strong>Congratulations!</strong> Your email has been verified and your account is now active.
+      </p>
+      
+      <p>
+        We're thrilled to have you as part of the {{ app_name }} community. You can now access all features and start organizing your tasks efficiently.
+      </p>
+      
+      <div style="text-align: center;">
+        <a href="{{ login_url }}" class="button">Go to Dashboard</a>
+      </div>
+      
+      <div class="feature-list">
+        <h3>✨ What you can do with {{ app_name }}:</h3>
+        <ul>
+          <li>📝 Create and manage multiple task lists</li>
+          <li>✅ Track your progress with task completion</li>
+          <li>🎨 Customize lists with colors and descriptions</li>
+          <li>🔒 Keep your data secure with authentication</li>
+        </ul>
+      </div>
+      
+      <p>
+        If you have any questions or need help getting started, don't hesitate to reach out to our support team.
+      </p>
+      
+      <p style="margin-top: 30px;">
+        Happy organizing!<br>
+        <strong>The {{ app_name }} Team</strong>
+      </p>
+    </div>
+    
+    <div class="footer">
+      <p>
+        You're receiving this email because you successfully verified your {{ app_name }} account.<br>
+        Need help? Contact us anytime.
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+

@@ -1,0 +1,151 @@
+services:
+  # Next.js Frontend Application
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ${FRONTEND_BUILD_TARGET:-development}
+    container_name: frontend
+    image: taskflow-frontend:latest
+    env_file:
+      - .env
+    environment:
+      # Use 'http://api:8000' if backend is in same Docker network
+      # Use 'http://host.docker.internal:8000' if backend is on host machine
+      # Use 'http://localhost:8000' if backend is accessible via localhost
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://host.docker.internal:8000}
+      - NEXT_PUBLIC_API_KEY=${NEXT_PUBLIC_API_KEY}
+      - NODE_ENV=${NODE_ENV:-development}
+    ports:
+      # Expose port 3000 for local development (comment out for production)
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      # Mount source code for hot-reload in development (comment out for production)
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - frontend-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # Optional: Backend API (uncomment if you want to run backend with frontend)
+  # api:
+  #   build:
+  #     context: ../backend
+  #     dockerfile: Dockerfile
+  #   container_name: api
+  #   image: taskflow-backend:latest
+  #   command: ["/wait-for-postgres.sh", "db", "python", "start.py"]
+  #   env_file:
+  #     - ../backend/.env
+  #   environment:
+  #     - RUN_MIGRATIONS=1
+  #     - REDIS_URL=redis://redis:6379/0
+  #     - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/taskflow_db
+  #     - INSTALL_DEPS_ON_START=${INSTALL_DEPS_ON_START:-0}
+  #   ports:
+  #     - "${API_PORT:-8000}:8000"
+  #   volumes:
+  #     - ../backend:/app
+  #     - pip_cache:/root/.cache/pip
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   networks:
+  #     - frontend-network
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "python -c 'import urllib.request; response = urllib.request.urlopen(\"http://localhost:8000/api/v1/health\"); exit(0 if response.status == 200 else 1)'"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 40s
+  #   restart: unless-stopped
+
+  # Optional: PostgreSQL Database (uncomment if running backend with frontend)
+  # db:
+  #   image: postgres:15
+  #   container_name: db
+  #   environment:
+  #     POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+  #     POSTGRES_DB: ${POSTGRES_DB:-taskflow_db}
+  #   ports:
+  #     - "${DB_PORT:-5432}:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   networks:
+  #     - frontend-network
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U postgres"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 10s
+  #   restart: unless-stopped
+
+  # Optional: Redis (uncomment if running backend with frontend)
+  # redis:
+  #   image: redis:7
+  #   container_name: redis
+  #   ports:
+  #     - "${REDIS_PORT:-6379}:6379"
+  #   networks:
+  #     - frontend-network
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 10s
+  #   restart: unless-stopped
+
+  # Optional: Celery Worker (uncomment if running backend with frontend)
+  # worker:
+  #   build:
+  #     context: ../backend
+  #     dockerfile: Dockerfile
+  #   image: taskflow-backend:latest
+  #   container_name: worker
+  #   command: celery -A app.celery_app.celery worker --loglevel=info
+  #   env_file:
+  #     - ../backend/.env
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379/0
+  #     - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/taskflow_db
+  #   volumes:
+  #     - ../backend:/app
+  #     - pip_cache:/root/.cache/pip
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   networks:
+  #     - frontend-network
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "celery -A app.celery_app.celery inspect ping"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 30s
+  #   restart: unless-stopped
+
+volumes:
+  # Uncomment if using backend services
+  # pgdata:
+  # pip_cache:
+
+networks:
+  frontend-network:
+    driver: bridge
+    # To connect to root docker-compose network, uncomment and use:
+    # external: true
+    # name: craze_dashboard_taskflow-network
