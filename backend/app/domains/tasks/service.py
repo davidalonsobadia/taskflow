@@ -7,7 +7,13 @@ from sqlalchemy.orm import Session
 
 from app.domains.lists.models import List
 from app.domains.tasks.models import Task
-from app.domains.tasks.schemas import PriorityEnum, TaskCreate, TaskResponse, TaskUpdate
+from app.domains.tasks.schemas import (
+    PriorityEnum,
+    RecurrenceEnum,
+    TaskCreate,
+    TaskResponse,
+    TaskUpdate,
+)
 
 
 class TasksService:
@@ -113,12 +119,20 @@ class TasksService:
         # Verify list ownership
         self.verify_list_ownership(task_data.list_id, user_id)
 
+        # A recurring task needs a due_date to anchor the recurrence rule.
+        if task_data.recurrence != RecurrenceEnum.none and task_data.due_date is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A recurring task requires a due_date"
+            )
+
         db_task = Task(
             title=task_data.title,
             description=task_data.description,
             list_id=task_data.list_id,
             priority=task_data.priority,
             due_date=task_data.due_date,
+            recurrence=task_data.recurrence,
             completed=False
         )
 
@@ -148,6 +162,14 @@ class TasksService:
         update_data = task_data.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             setattr(db_task, field, value)
+
+        # A recurring task needs a due_date to anchor the recurrence rule.
+        # Validate the resulting state after applying the partial update.
+        if db_task.recurrence != RecurrenceEnum.none and db_task.due_date is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A recurring task requires a due_date"
+            )
 
         self.db.commit()
         self.db.refresh(db_task)
