@@ -1,0 +1,224 @@
+name: Agent - Auto-Retry on Failure
+
+# Fires whenever CI or the Reviewer agent finishes with a failure on a
+# `claude/issue-*` branch. Collects failure context, closes the bad PR,
+# deletes the branch, posts context on the issue, and re-adds the `auto`
+# label so the Implementer agent runs again — up to 3 times. On the 4th
+# failure it stops and marks the issue `needs-human`.
+on:
+  workflow_run:
+    workflows: ["CI", "Agent - Review"]
+    types: [completed]
+
+permissions:
+  contents: write      # delete the branch
+  issues: write        # comment + labels on the issue
+  pull-requests: write # close the PR
+
+# Queue retries for the same branch instead of racing. If both CI and the
+# Reviewer fail at the same time, the second run will find no open PR (already
+# handled by the first) and exit gracefully.
+concurrency:
+  group: auto-retry-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    name: retry
+    if: |
+      github.event.workflow_run.conclusion == 'failure' &&
+      startsWith(github.event.workflow_run.head_branch, 'claude/issue-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+
+    steps:
+      # Needed so the local .github/actions/slack-notify composite action is available.
+      - uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 1. Determine the issue number, find the open PR, and decide what to do.
+      # -----------------------------------------------------------------------
+      - name: Resolve issue, PR, and retry count
+        id: meta
+        run: |
+          issue="${BRANCH#claude/issue-}"
+          echo "issue=$issue" >> "$GITHUB_OUTPUT"
+
+          # Look for an open PR on this branch. Empty → already handled or merged.
+          pr=$(gh pr list \
+                 --repo "$REPO" \
+                 --head "$BRANCH" \
+                 --state open \
+                 --json number \
+                 --jq '.[0].number // empty')
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$pr" ]; then
+            echo "action=skip" >> "$GITHUB_OUTPUT"
+            echo "No open PR found for $BRANCH — likely already handled. Skipping."
+            exit 0
+          fi
+
+          # Count existing retry-N labels to know which attempt this is.
+          current=$(gh api "repos/$REPO/issues/$issue" \
+                      --jq '[.labels[].name | select(startswith("retry-"))] | length')
+          next=$((current + 1))
+          echo "next_retry=$next" >> "$GITHUB_OUTPUT"
+
+          if [ "$next" -gt 3 ]; then
+            echo "action=needs-human" >> "$GITHUB_OUTPUT"
+          else
+            echo "action=retry" >> "$GITHUB_OUTPUT"
+          fi
+
+      # -----------------------------------------------------------------------
+      # 2. Collect failure context into a temp file so multiline content is safe.
+      # -----------------------------------------------------------------------
+      - name: Collect failure context
+        id: ctx
+        if: steps.meta.outputs.action == 'retry'
+        env:
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          PR: ${{ steps.meta.outputs.pr }}
+          NEXT_RETRY: ${{ steps.meta.outputs.next_retry }}
+        run: |
+          {
+            echo "### Auto-retry ${NEXT_RETRY}/3"
+            echo ""
+            echo "The **${WORKFLOW_NAME}** workflow failed on branch \`${BRANCH}\`."
+            echo "Failure details below — address all issues before the next attempt."
+            echo ""
+          } > /tmp/ctx.md
+
+          if [ "$WORKFLOW_NAME" = "CI" ]; then
+            echo "**Failed step logs (capped at 300 lines):**" >> /tmp/ctx.md
+            echo '````' >> /tmp/ctx.md
+            gh run view "$RUN_ID" --repo "$REPO" --log-failed 2>&1 \
+              | head -300 >> /tmp/ctx.md \
+              || echo "(could not retrieve logs)" >> /tmp/ctx.md
+            echo '````' >> /tmp/ctx.md
+          fi
+
+          if [ "$WORKFLOW_NAME" = "Agent - Review" ]; then
+            echo "**Inline review comments that blocked the merge:**" >> /tmp/ctx.md
+            gh api "repos/$REPO/pulls/$PR/comments" \
+              --jq '.[] | "**\(.path):\(.line // "–")** — \(.body)\n"' 2>&1 \
+              | head -150 >> /tmp/ctx.md \
+              || echo "(could not retrieve inline comments)" >> /tmp/ctx.md
+
+            echo "" >> /tmp/ctx.md
+            echo "**PR timeline comments from the reviewer:**" >> /tmp/ctx.md
+            gh api "repos/$REPO/issues/$PR/comments" \
+              --jq '.[].body' 2>&1 \
+              | head -150 >> /tmp/ctx.md \
+              || echo "(could not retrieve timeline comments)" >> /tmp/ctx.md
+          fi
+
+          echo "" >> /tmp/ctx.md
+          echo "Fix all issues above. The implementer will open a new PR automatically." >> /tmp/ctx.md
+
+      # -----------------------------------------------------------------------
+      # 3. Close the bad PR and delete its branch so the implementer can start clean.
+      # -----------------------------------------------------------------------
+      - name: Close failed PR and delete branch
+        if: steps.meta.outputs.action == 'retry'
+        env:
+          PR: ${{ steps.meta.outputs.pr }}
+          NEXT_RETRY: ${{ steps.meta.outputs.next_retry }}
+        run: |
+          gh pr close "$PR" \
+            --repo "$REPO" \
+            --comment "Closing automatically for retry ${NEXT_RETRY}/3. Failure context will be posted on the issue and the implementer will re-run."
+
+          gh api "repos/$REPO/git/refs/heads/${BRANCH}" \
+            --method DELETE 2>/dev/null \
+            || echo "Branch not found or already deleted — continuing."
+
+      # -----------------------------------------------------------------------
+      # 4. Post the failure context on the issue so the implementer can read it.
+      # -----------------------------------------------------------------------
+      - name: Post failure context on issue
+        if: steps.meta.outputs.action == 'retry'
+        env:
+          ISSUE: ${{ steps.meta.outputs.issue }}
+        run: |
+          gh issue comment "$ISSUE" \
+            --repo "$REPO" \
+            --body "$(cat /tmp/ctx.md)"
+
+      # -----------------------------------------------------------------------
+      # 5. Add the retry-N label and re-trigger the Implementer agent.
+      # -----------------------------------------------------------------------
+      - name: Label issue and re-trigger implementer
+        if: steps.meta.outputs.action == 'retry'
+        env:
+          ISSUE: ${{ steps.meta.outputs.issue }}
+          NEXT_RETRY: ${{ steps.meta.outputs.next_retry }}
+        run: |
+          gh label create "retry-${NEXT_RETRY}" \
+            --repo "$REPO" \
+            --color "FFA500" \
+            --description "Auto-retry attempt ${NEXT_RETRY}/3" 2>/dev/null || true
+
+          gh issue edit "$ISSUE" --repo "$REPO" --add-label "retry-${NEXT_RETRY}"
+
+          # Re-trigger: remove then re-add `auto` so the labeled event fires again.
+          # Must use a PAT — GITHUB_TOKEN-triggered label events are silently suppressed
+          # by GitHub and will not fire the issues:labeled workflow trigger.
+          gh issue edit "$ISSUE" --repo "$REPO" --remove-label "auto" 2>/dev/null || true
+          sleep 5
+          GH_TOKEN="${{ secrets.PIPELINE_PAT }}" \
+            gh issue edit "$ISSUE" --repo "$REPO" --add-label "auto"
+
+      # -----------------------------------------------------------------------
+      # 6. Max retries exceeded — escalate to a human.
+      # -----------------------------------------------------------------------
+      - name: Mark as needs-human
+        if: steps.meta.outputs.action == 'needs-human'
+        env:
+          ISSUE: ${{ steps.meta.outputs.issue }}
+          PR: ${{ steps.meta.outputs.pr }}
+        run: |
+          gh label create "needs-human" \
+            --repo "$REPO" \
+            --color "B60205" \
+            --description "Max auto-retries exceeded — human intervention required" 2>/dev/null || true
+
+          gh issue edit "$ISSUE" --repo "$REPO" --add-label "needs-human"
+
+          gh issue comment "$ISSUE" --repo "$REPO" --body "$(cat <<'BODY'
+          ### Max retries reached (3/3)
+
+          The implementer failed 3 consecutive times. Automatic retries are exhausted.
+
+          **Action required:** review the failure context in the comments above, fix the
+          problem or clarify the issue requirements, then remove the \`needs-human\` label
+          and re-add \`auto\` to trigger a fresh implementation attempt.
+          BODY
+          )"
+
+      # -----------------------------------------------------------------------
+      # Notifications
+      # -----------------------------------------------------------------------
+      - name: Notify Slack — retrying
+        if: steps.meta.outputs.action == 'retry'
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            :arrows_counterclockwise: *Auto-retry ${{ steps.meta.outputs.next_retry }}/3* for issue #${{ steps.meta.outputs.issue }} — ${{ github.event.workflow_run.name }} failed on `${{ env.BRANCH }}`. Re-running implementer with failure context.
+            ${{ github.server_url }}/${{ github.repository }}/issues/${{ steps.meta.outputs.issue }}
+
+      - name: Notify Slack — needs human
+        if: steps.meta.outputs.action == 'needs-human'
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            :sos: *Max retries reached* for issue #${{ steps.meta.outputs.issue }} — the implementer failed 3 times. Human intervention required.
+            ${{ github.server_url }}/${{ github.repository }}/issues/${{ steps.meta.outputs.issue }}

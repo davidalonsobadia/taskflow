@@ -89,8 +89,11 @@ jobs:
             specified in `.claude/agents/implementer.md` and follow `CLAUDE.md`.
 
             Your task is the GitHub issue that triggered this run:
-            issue #${{ github.event.issue.number }}. Read that issue (title and body)
-            for the requirements.
+            issue #${{ github.event.issue.number }}. Read that issue (title, body,
+            AND all comments) for the requirements. If any comment contains an
+            "Auto-retry N/3" failure report (posted by the auto-retry workflow),
+            treat it as a mandatory fix list: address every item in it before
+            opening a new PR.
 
             Decision gate:
             - If the issue is ambiguous, too large for one safe PR, or would need a

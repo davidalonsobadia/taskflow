@@ -1,0 +1,91 @@
+name: Agent - Advance Queue
+
+# Fires whenever a `claude/issue-*` PR is merged into main.
+# Finds the next open issue in the pipeline and adds the `auto` label so
+# the Implementer agent picks it up automatically.
+#
+# Issues are processed in ascending numeric order. To exclude an issue from
+# the automated pipeline, add the `no-auto` label to it. Epic tracking issues
+# (title starting with "Epic:") are excluded automatically.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  advance:
+    name: advance
+    if: |
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'claude/issue-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find next issue and trigger implementer
+        id: next
+        run: |
+          # Select the lowest-numbered open issue that is not already running or excluded.
+          # Exclusions:
+          #   auto        — already triggered (implementer is working on it)
+          #   needs-human — stuck, requires human intervention
+          #   epic        — tracking issue, not implementable
+          #   no-auto     — explicitly opted out of the pipeline
+          # Issues whose title begins with "Epic:" are also excluded.
+          next_issue=$(gh issue list \
+            --repo "$REPO" \
+            --state open \
+            --limit 100 \
+            --json number,title,labels \
+            --jq '[
+              .[] |
+              select(
+                (.title | test("^Epic:"; "i") | not) and
+                (.labels | map(.name) |
+                  (contains(["auto"])        | not) and
+                  (contains(["needs-human"]) | not) and
+                  (contains(["epic"])        | not) and
+                  (contains(["no-auto"])     | not)
+                )
+              ) | .number
+            ] | sort | .[0] // empty')
+
+          echo "next_issue=$next_issue" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$next_issue" ]; then
+            echo "No more issues to process — pipeline may be complete."
+            exit 0
+          fi
+
+          echo "Triggering issue #${next_issue}"
+          # Must use a PAT here — GITHUB_TOKEN-triggered label events are silently
+          # suppressed by GitHub and will not fire the issues:labeled workflow trigger.
+          GH_TOKEN="${{ secrets.PIPELINE_PAT }}" \
+            gh issue edit "$next_issue" --repo "$REPO" --add-label "auto"
+
+      - name: Notify Slack — next issue triggered
+        if: steps.next.outputs.next_issue != ''
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            :fast_forward: *Next issue queued* — issue #${{ steps.next.outputs.next_issue }} triggered automatically after PR #${{ github.event.pull_request.number }} merged.
+            ${{ github.server_url }}/${{ github.repository }}/issues/${{ steps.next.outputs.next_issue }}
+
+      - name: Notify Slack — pipeline complete
+        if: steps.next.outputs.next_issue == ''
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            :tada: *Pipeline complete!* All issues in the `claude/issue-*` queue have been implemented and merged.
+            ${{ github.server_url }}/${{ github.repository }}/issues

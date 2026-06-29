@@ -1,23 +1,20 @@
 name: Agent - Plan
 
-# Three ways to trigger the Planner:
+# Two ways to trigger the Planner:
 #
 #   1. Label trigger — add the `plan` label to a GitHub issue whose body contains a
 #      feature idea. The Planner reads that issue and creates ordered sub-issues.
 #
-#   2. File trigger — push a change to docs/backlog.md on main. The Planner reads
-#      the diff, picks up new feature entries, and creates issues for them.
+#   2. Manual dispatch — run via the Actions UI. Supply either a free-text idea
+#      (inline) or a path to a repo file that lists multiple features
+#      (defaults to docs/backlog.md).
 #
-#   3. Manual dispatch — run via the Actions UI. Supply either a free-text idea
-#      (inline) or a path to a repo file that lists multiple features.
+# Note: push trigger is not supported by claude-code-action@v1. To process
+# docs/backlog.md after pushing it, trigger this workflow manually via the UI.
 
 on:
   issues:
     types: [labeled]
-  push:
-    branches: [main]
-    paths:
-      - 'docs/backlog.md'
   workflow_dispatch:
     inputs:
       idea:
@@ -46,7 +43,6 @@ jobs:
     name: plan
     if: |
       (github.event_name == 'issues' && github.event.label.name == 'plan') ||
-      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
