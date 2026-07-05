@@ -13,7 +13,7 @@ words when strictly necessary.
 
 ## 1. Project overview
 
-SolarLeadGeneration is a monorepo with three parts:
+TaskFlow is a monorepo with three parts:
 
 - **`backend/`** — FastAPI (Python 3.12) REST API. SQLAlchemy ORM, Pydantic v2,
   Alembic migrations, JWT auth, API-key gateway, Celery + Redis for async tasks.
@@ -21,8 +21,6 @@ SolarLeadGeneration is a monorepo with three parts:
   shadcn/ui + Radix). Package manager is **pnpm**.
 - **PostgreSQL 15** is the database; **Redis 7** is the Celery broker. The full
   stack runs via [`docker-compose.yml`](docker-compose.yml).
-
-An AI-powered platform for discovering, qualifying, and managing solar installation leads.
 
 Production deployment is intentionally out of scope for now.
 
