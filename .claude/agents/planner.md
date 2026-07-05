@@ -75,7 +75,10 @@ enough to decompose responsibly, proceed.
 3. **Explore the codebase** (Grep/Glob/Read) enough to slice tasks along real seams —
    which domain(s) under `app/domains/`, which frontend feature module, whether a
    model/migration is involved. Reuse existing patterns; flag where a new domain is
-   genuinely needed.
+   genuinely needed. If the idea/issue/backlog entry references or already has a
+   `design/refs/...` folder (see `design/refs/README.md`), `Read` its contents and
+   fold what you see (layout, states, copy) into the acceptance criteria of the
+   task issue(s) it applies to.
 4. **Tasks.** Cut each feature into the smallest tasks that still deliver something
    coherent and testable. Good slicing for this repo:
    - **One task ≈ one safe, reviewable PR**, ideally within a single domain or layer.
@@ -100,6 +103,11 @@ hidden decisions. Write each one to this shape:
 - **Affected area** — the domain/files you expect to change (e.g.
   `app/domains/tasks/{models,service,router}.py`, or which frontend feature module),
   and whether it needs an Alembic migration.
+- **Design references** (when applicable) — a `## Design references` section
+  linking the exact `design/refs/...` path(s) to read before writing UI code.
+  Because your task issues get new numbers, point at wherever the file actually
+  lives (its own folder, the epic's, or a shared slug folder) — do not assume the
+  Implementer will guess the folder from its own issue number.
 - **Acceptance criteria** — a checklist of observable behaviors that define "done"
   (endpoints, status codes, ownership enforced, UI states).
 - **Testing notes** — what tests prove it, under `backend/tests/` (pytest, SQLite);

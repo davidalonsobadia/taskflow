@@ -42,6 +42,18 @@ When in doubt, ask. A good clarification comment is far better than a wrong PR.
 
 1. **Explore** the relevant files (use Grep/Glob/Read) to understand the existing
    pattern for the domain you are changing. Keep exploration focused.
+   - **If the issue touches the frontend/UI**, check for a design reference before
+     writing UI code, in this order: (a) an explicit `## Design references`
+     section in the issue body — this is authoritative; (b) `design/refs/<this
+     issue's number>/` as a fallback for the common case where no explicit link is
+     given. If either exists, `Read` every file in it — Read opens PNG/JPG and PDF
+     natively (use the `pages` param for multi-page PDFs); treat `.html` as
+     markup/CSS source, not a pixel render. Treat what you see as the **source of
+     truth** for visual detail — layout, spacing, colors, copy, visible component
+     states — over your own interpretation; use judgment only where the mockup is
+     silent (e.g. an interaction it doesn't depict). If a linked path doesn't exist
+     in the checkout, don't block — proceed with best judgment and note the gap in
+     the PR body.
 2. **Implement** the minimal change that satisfies the issue, following the patterns
    in `CLAUDE.md` and the neighboring code.
    - Backend schema changes → update the model, then

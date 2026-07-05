@@ -121,7 +121,31 @@ frontend/
   will **not** fail on type errors. Do not rely on the build to catch them — keep
   types correct and run `pnpm lint`.
 
-## 6. Git & PR conventions (for autonomous agents)
+## 6. Design references for UI issues
+
+When a task should match a specific visual design (a mockup, screenshot, PDF spec,
+or HTML prototype), commit the file(s) into the repo under `design/refs/<key>/`
+rather than only linking an external URL or GitHub's issue-attachment CDN link —
+none of the pipeline agents have web access (`WebFetch`/`WebSearch` are
+intentionally disallowed for Planner, Implementer, and Reviewer), but
+`actions/checkout@v4` already gives every agent run the full repo, so a committed
+file is directly readable via the `Read` tool (which natively opens PNG/JPG and
+PDF, and reads `.html` as markup/CSS source).
+
+- Allowed types: `.png`, `.jpg`/`.jpeg`, `.pdf`, `.html`.
+- Link the exact path(s) under a `## Design references` section in the issue
+  body — this is the **authoritative** pointer agents follow; `design/refs/<issue-
+  number>/` is only the default drop location for the common case. See
+  `design/refs/README.md` for the full convention, epic/shared-reference handling,
+  and an example.
+- The Implementer treats a linked reference as the source of truth for visual
+  detail (layout, spacing, colors, copy, visible states) over its own
+  interpretation — see `.claude/agents/implementer.md`.
+- No auto-download of issue attachments, no headless-browser rendering, no Git
+  LFS — deliberately out of scope. Pre-rendering HTML mockups to PNG for pixel
+  fidelity is a possible future enhancement, not built now.
+
+## 7. Git & PR conventions (for autonomous agents)
 
 - One issue → one branch (`claude/issue-<n>`) → one Pull Request. Keep changes
   **scoped to the issue**; do not bundle unrelated refactors.
@@ -132,7 +156,7 @@ frontend/
   `ruff check .` + tests; frontend `pnpm lint` + `pnpm build`.
 - `main` is protected: nothing merges unless CI passes.
 
-## 7. Secrets
+## 8. Secrets
 
 - The real `backend/.env` and `frontend/.env` are git-ignored and must never be
   committed. Use `.env.example` for documenting non-sensitive defaults.

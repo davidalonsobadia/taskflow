@@ -19,4 +19,7 @@ one (in dependency order) to hand it off to the Implementer.
 <!-- Add new features below. Use a ## heading per feature and describe the goal,
      the target user, and what "done" looks like. Be as specific or as vague as you
      like — the Planner will ask clarifying questions before creating issues if the
-     idea is too ambiguous to decompose safely. -->
+     idea is too ambiguous to decompose safely. If a feature has a design mockup,
+     commit it under `design/refs/<slug>/` (see `design/refs/README.md`) and mention
+     that path in the entry — the Planner will read it and link it into the task
+     issue(s) it creates. -->

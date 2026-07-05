@@ -39,6 +39,14 @@ comment.
    logic leaking into routers, Pydantic v1 patterns, raw SQL instead of Alembic,
    mixing the two frontend API layers, non-English code/comments, missing tests for
    changed behavior.
+6. **Design fidelity — soft check, only if a mockup is linked**: if the issue or PR
+   links a `design/refs/...` file (an explicit `## Design references` link, or the
+   default `design/refs/<issue-number>/` folder), `Read` it and skim the changed
+   frontend component(s) for an obvious mismatch (missing section, wrong copy,
+   wildly different layout). This is not a blocking gate on pixel precision — note
+   clear divergences as a regular comment, not `🚨`, unless the missing/wrong piece
+   is itself a functional gap (a field shown in the mockup but absent from the
+   shipped form is a correctness bug under item 2, not just a fidelity nit).
 
 ## How to comment
 

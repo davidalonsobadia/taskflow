@@ -1,0 +1,7 @@
+# Design reference assets (design/refs/) — see CLAUDE.md §6 and design/refs/README.md.
+design/refs/**/*.png binary
+design/refs/**/*.jpg binary
+design/refs/**/*.jpeg binary
+design/refs/**/*.pdf binary
+# HTML mockups are text: normal diff/EOL handling, unlike the binary types above.
+design/refs/**/*.html text
