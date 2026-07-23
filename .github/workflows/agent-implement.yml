@@ -3,6 +3,18 @@ name: Agent - Implement
 # Triggered when the `auto` label is added to an issue.
 # The Implementer agent reads the issue, implements a scoped change, runs the
 # checks on the runner, opens a PR that closes the issue, and arms auto-merge.
+#
+# Gate: the `anthropic/claude-code-action` step can end its Claude Code session
+# with an internal error (e.g. an Anthropic API/auth failure on the very first
+# turn) while still reporting its own GitHub Actions step as successful. Left
+# unchecked, that looks like a normal completion — no PR, no clarification
+# comment, nothing — and the issue is silently stuck with the `auto` label
+# forever, since `agent-auto-retry.yml` only reacts to CI/Review failures on an
+# already-opened `claude/issue-*` PR. The "Gate on implementer result" step
+# below reads the action's `execution_file` output and fails the job closed if
+# the run ended in error, so the steps after it can retry (up to 3 times, via
+# the same `retry-N` label convention as `agent-auto-retry.yml`) or escalate to
+# `needs-human`.
 on:
   issues:
     types: [labeled]
@@ -124,6 +136,35 @@ jobs:
             --allowedTools "Edit,Write,Read,Glob,Grep,TodoWrite,Bash"
             --disallowedTools "WebSearch,WebFetch"
 
+      # Fail-closed check on the actual Claude Code result, not just the GitHub
+      # Actions step conclusion (which is "success" even when the agent's own
+      # session ended in error). Mirrors the review gate in agent-review.yml.
+      - name: Gate on implementer result
+        id: gate
+        if: always()
+        env:
+          EXECUTION_FILE: ${{ steps.implement.outputs.execution_file }}
+          AGENT_OUTCOME: ${{ steps.implement.outcome }}
+        run: |
+          if [ -z "${EXECUTION_FILE}" ] || [ ! -f "${EXECUTION_FILE}" ]; then
+            echo "::error::Implementer produced no execution file (agent step outcome: ${AGENT_OUTCOME}). Failing closed."
+            exit 1
+          fi
+
+          # NOTE: use `if .x == null` rather than `// empty`/`// "?"` here — jq's
+          # `//` operator treats a literal `false` the same as `null` ("falsy"),
+          # so `.is_error // empty` would silently swallow a genuine `false`
+          # (success) and make this gate fail closed on every successful run.
+          is_error="$(jq -r 'if (.[-1].is_error == null) then "unknown" else (.[-1].is_error | tostring) end' "${EXECUTION_FILE}")"
+          num_turns="$(jq -r 'if (.[-1].num_turns == null) then "?" else (.[-1].num_turns | tostring) end' "${EXECUTION_FILE}")"
+          cost="$(jq -r 'if (.[-1].total_cost_usd == null) then "?" else (.[-1].total_cost_usd | tostring) end' "${EXECUTION_FILE}")"
+          echo "Implementer result: is_error=${is_error:-unknown} num_turns=${num_turns} cost_usd=${cost}"
+
+          if [ "${is_error}" != "false" ]; then
+            echo "::error::Implementer's Claude Code session ended in an internal error (is_error=${is_error:-unknown}, num_turns=${num_turns}) before it could open a PR or comment. Failing the job so it gets retried."
+            exit 1
+          fi
+
       - name: Notify Slack - success
         if: success()
         uses: ./.github/actions/slack-notify
@@ -141,3 +182,109 @@ jobs:
           text: |
             :x: *Implementer FAILED* for issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      # -----------------------------------------------------------------------
+      # Recovery for a failure that happened before any PR/branch existed (e.g.
+      # the gate above tripped). If a PR is already open for this issue, leave
+      # it to agent-auto-retry.yml's CI/Review-driven retry instead.
+      # -----------------------------------------------------------------------
+      - name: Resolve retry decision
+        id: retry
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          pr=$(gh pr list --repo "$REPO" --head "claude/issue-${ISSUE}" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            echo "action=skip" >> "$GITHUB_OUTPUT"
+            echo "PR #$pr is already open for this issue — leaving retry to the CI/Review auto-retry workflow."
+            exit 0
+          fi
+
+          current=$(gh api "repos/$REPO/issues/$ISSUE" --jq '[.labels[].name | select(startswith("retry-"))] | length')
+          next=$((current + 1))
+          echo "next_retry=$next" >> "$GITHUB_OUTPUT"
+
+          if [ "$next" -gt 3 ]; then
+            echo "action=needs-human" >> "$GITHUB_OUTPUT"
+          else
+            echo "action=retry" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Retry — comment, label, and re-trigger
+        if: always() && steps.retry.outputs.action == 'retry'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          NEXT_RETRY: ${{ steps.retry.outputs.next_retry }}
+        run: |
+          gh label create "retry-${NEXT_RETRY}" \
+            --repo "$REPO" \
+            --color "FFA500" \
+            --description "Auto-retry attempt ${NEXT_RETRY}/3" 2>/dev/null || true
+
+          gh issue edit "$ISSUE" --repo "$REPO" --add-label "retry-${NEXT_RETRY}"
+
+          gh issue comment "$ISSUE" --repo "$REPO" --body "$(cat <<BODY
+          ### Auto-retry ${NEXT_RETRY}/3
+
+          The Implementer's Claude Code session ended in an internal error before it
+          could read the issue or open a PR (no code was written, no PR exists). This
+          is usually a transient Anthropic API/auth issue rather than a problem with
+          the issue itself. Re-triggering automatically.
+          BODY
+          )"
+
+          # Must use a PAT — GITHUB_TOKEN-triggered label events are silently
+          # suppressed by GitHub and will not fire the issues:labeled trigger.
+          gh issue edit "$ISSUE" --repo "$REPO" --remove-label "auto" 2>/dev/null || true
+          sleep 5
+          GH_TOKEN="${{ secrets.PIPELINE_PAT }}" \
+            gh issue edit "$ISSUE" --repo "$REPO" --add-label "auto"
+
+      - name: Escalate — mark needs-human
+        if: always() && steps.retry.outputs.action == 'needs-human'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create "needs-human" \
+            --repo "$REPO" \
+            --color "B60205" \
+            --description "Max auto-retries exceeded — human intervention required" 2>/dev/null || true
+
+          gh issue edit "$ISSUE" --repo "$REPO" --add-label "needs-human"
+
+          gh issue comment "$ISSUE" --repo "$REPO" --body "$(cat <<'BODY'
+          ### Max retries reached (3/3)
+
+          The Implementer failed 3 consecutive times before it could even start work
+          (internal error each time, no PR ever opened). Automatic retries are exhausted.
+
+          **Action required:** check the Implementer's Anthropic API/OAuth token status
+          (`CLAUDE_CODE_OAUTH_TOKEN`), then remove the `needs-human` label and re-add
+          `auto` to try again.
+          BODY
+          )"
+
+      - name: Notify Slack — retrying
+        if: always() && steps.retry.outputs.action == 'retry'
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            :arrows_counterclockwise: *Auto-retry ${{ steps.retry.outputs.next_retry }}/3* for issue #${{ github.event.issue.number }} — the Implementer's session errored before opening a PR. Re-running automatically.
+            ${{ github.event.issue.html_url }}
+
+      - name: Notify Slack — needs human
+        if: always() && steps.retry.outputs.action == 'needs-human'
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            :sos: *Max retries reached* for issue #${{ github.event.issue.number }} — the Implementer errored 3 times without ever opening a PR. Human intervention required.
+            ${{ github.event.issue.html_url }}
