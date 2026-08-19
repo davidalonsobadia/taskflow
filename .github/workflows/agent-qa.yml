@@ -1,0 +1,403 @@
+name: Agent - QA
+
+# Triggered on the same events as Agent - Review. The Tester agent boots the real
+# stack for this PR (Postgres, Redis, the API, and — if touched — the built frontend)
+# and exercises the shipped feature end-to-end against the originating issue's
+# acceptance criteria. This is the one check in the pipeline that actually RUNS the
+# app instead of reading code: CI only lints/builds/unit-tests, and the Reviewer only
+# reads the diff. This job is meant to be a REQUIRED status check on `main`: a BLOCK
+# verdict (or a tester error) holds the PR's auto-merge, same fail-closed pattern as
+# agent-review.yml.
+#
+# Sequencing note: this must be triggered directly by `pull_request` (not
+# `workflow_run`) so it attaches as a check on the PR at all — a `workflow_run`-
+# triggered job runs against the default branch and does NOT automatically show up
+# as a status on the originating PR's head commit without extra Checks-API plumbing.
+# To still avoid spending several minutes booting the stack on a PR the Reviewer is
+# already going to block, this job polls the "review" check-run on the same commit
+# and skips its own heavy steps unless Review concluded "success".
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Least privilege: read the code and checks, comment on the PR/issue. NO
+# `contents: write` — same reasoning as agent-review.yml: even a prompt-injection
+# attempt in the issue/PR cannot push code, and the verdict file lives only on the
+# runner. `checks: read` is needed to poll the Reviewer's check-run conclusion.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+  checks: read
+  id-token: write
+
+concurrency:
+  group: agent-qa-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    name: qa
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: taskflow_qa
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/taskflow_qa
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: qa-ephemeral-secret-not-for-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # -----------------------------------------------------------------------
+      # 1. Decide whether to do any real work: skip if opted out via label, or if
+      #    the Reviewer hasn't passed yet (its own required check already blocks
+      #    the merge in that case, so there is nothing for QA to add).
+      # -----------------------------------------------------------------------
+      - name: Check for the no-qa label
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.pull_request.number }}
+        run: |
+          # PRs and issues share the same numbering/label API in GitHub.
+          has_no_qa=$(gh api "repos/$REPO/issues/$ISSUE/labels" --jq '[.[].name] | contains(["no-qa"])')
+          echo "skip=$has_no_qa" >> "$GITHUB_OUTPUT"
+          if [ "$has_no_qa" = "true" ]; then
+            echo "PR/issue #$ISSUE is labeled 'no-qa' — skipping the Tester agent."
+          fi
+
+      - name: Wait for the Review verdict
+        id: wait_review
+        if: steps.label.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Poll for up to ~25 minutes (comfortably past Review's own 20-minute
+          # timeout) so a slow-but-successful Review doesn't get skipped by a race.
+          echo "Polling the 'review' check-run on $SHA..."
+          conclusion="timeout"
+          for i in $(seq 1 50); do
+            run="$(gh api "repos/$REPO/commits/$SHA/check-runs" \
+              --jq '[.check_runs[] | select(.name=="review")] | sort_by(.started_at) | last')"
+            status="$(echo "$run" | jq -r 'if . == null then "not_started" else (.status // "queued") end')"
+            echo "attempt $i/50: status=$status"
+            if [ "$status" = "completed" ]; then
+              conclusion="$(echo "$run" | jq -r '.conclusion')"
+              break
+            fi
+            sleep 30
+          done
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+          echo "Review concluded: $conclusion"
+
+      - name: Decide whether to run the Tester agent
+        id: gatecheck
+        run: |
+          if [ "${{ steps.label.outputs.skip }}" = "true" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.wait_review.outputs.conclusion }}" = "success" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Review did not pass (conclusion: '${{ steps.wait_review.outputs.conclusion }}') — Review's own required check already blocks the merge, so skipping QA."
+          fi
+
+      - name: Detect whether the frontend was touched
+        id: changed
+        if: steps.gatecheck.outputs.run == 'true'
+        run: |
+          git fetch origin main --depth=1
+          if git diff --name-only origin/main...HEAD | grep -q '^frontend/'; then
+            echo "frontend_touched=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend_touched=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # -----------------------------------------------------------------------
+      # 2. Boot the real backend: migrations against real Postgres, then the API
+      #    itself with the real x-api-key middleware active (unlike the SQLite/
+      #    TESTING=1 setup the Implementer and CI use for unit tests) — this is
+      #    the closest thing to production behavior the pipeline exercises.
+      # -----------------------------------------------------------------------
+      - uses: actions/setup-python@v5
+        if: steps.gatecheck.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        if: steps.gatecheck.outputs.run == 'true'
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Apply migrations
+        if: steps.gatecheck.outputs.run == 'true'
+        working-directory: backend
+        run: alembic upgrade head
+
+      - name: Create a QA API key
+        id: apikey
+        if: steps.gatecheck.outputs.run == 'true'
+        working-directory: backend
+        run: |
+          output="$(python scripts/create_api_client.py --name qa-agent)"
+          # token_urlsafe(32) is a long [A-Za-z0-9_-] string — the only line that
+          # matches this shape, so this is robust to the script's exact print format.
+          key="$(echo "$output" | grep -Eo '^[A-Za-z0-9_-]{40,}$')"
+          if [ -z "$key" ]; then
+            echo "::error::Could not extract the QA API key from create_api_client.py output."
+            echo "$output"
+            exit 1
+          fi
+          echo "::add-mask::$key"
+          echo "QA_API_KEY=$key" >> "$GITHUB_ENV"
+
+      - name: Start the backend API
+        if: steps.gatecheck.outputs.run == 'true'
+        working-directory: backend
+        run: |
+          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/qa-backend.log 2>&1 &
+          echo "Waiting for the backend to become healthy..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/api/v1/health > /dev/null; then
+              echo "Backend is up."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Backend did not become healthy in time."
+          cat /tmp/qa-backend.log
+          exit 1
+
+      - name: Start the Celery worker
+        if: steps.gatecheck.outputs.run == 'true'
+        working-directory: backend
+        run: |
+          # Best-effort: not every issue touches async tasks, so this doesn't gate.
+          nohup celery -A app.celery_app.celery worker --loglevel=info > /tmp/qa-celery.log 2>&1 &
+
+      # -----------------------------------------------------------------------
+      # 3. Only if the PR touches the frontend: build it for real, serve it against
+      #    the backend just started, and provision a headless browser to drive it.
+      # -----------------------------------------------------------------------
+      - uses: pnpm/action-setup@v4
+        if: steps.gatecheck.outputs.run == 'true' && steps.changed.outputs.frontend_touched == 'true'
+        with:
+          version: 10.20.0
+
+      - uses: actions/setup-node@v4
+        if: steps.gatecheck.outputs.run == 'true' && steps.changed.outputs.frontend_touched == 'true'
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        if: steps.gatecheck.outputs.run == 'true' && steps.changed.outputs.frontend_touched == 'true'
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and start the frontend
+        if: steps.gatecheck.outputs.run == 'true' && steps.changed.outputs.frontend_touched == 'true'
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          NEXT_PUBLIC_API_KEY: ${{ env.QA_API_KEY }}
+        run: |
+          pnpm build
+          nohup pnpm start > /tmp/qa-frontend.log 2>&1 &
+          echo "Waiting for the frontend..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000 > /dev/null; then
+              echo "Frontend is up."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Frontend did not become reachable in time."
+          cat /tmp/qa-frontend.log
+          exit 1
+
+      # Playwright is QA-only tooling, not a frontend project dependency — it is
+      # installed into a scratch directory outside frontend/, so it never touches
+      # frontend/package.json or frontend/pnpm-lock.yaml.
+      - name: Install Playwright (Chromium only)
+        if: steps.gatecheck.outputs.run == 'true' && steps.changed.outputs.frontend_touched == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/qa-tools"
+          cd "$RUNNER_TEMP/qa-tools"
+          npm init -y > /dev/null
+          npm install playwright@1.49.1 > /dev/null
+          npx playwright install --with-deps chromium
+          echo "QA_TOOLS_DIR=$RUNNER_TEMP/qa-tools" >> "$GITHUB_ENV"
+
+      - name: Prepare scratch and artifacts directories
+        if: steps.gatecheck.outputs.run == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/qa-scratch" "$RUNNER_TEMP/qa-artifacts"
+          echo "QA_SCRATCH_DIR=$RUNNER_TEMP/qa-scratch" >> "$GITHUB_ENV"
+          echo "QA_ARTIFACTS_DIR=$RUNNER_TEMP/qa-artifacts" >> "$GITHUB_ENV"
+
+      # Computed here (instead of a `cond && 'a' || 'b'` expression inline in the
+      # prompt below) so the prompt stays a plain string substitution — easier to
+      # read and to debug if it ever renders wrong.
+      - name: Compose the frontend note for the Tester prompt
+        id: frontend_note
+        if: steps.gatecheck.outputs.run == 'true'
+        run: |
+          if [ "${{ steps.changed.outputs.frontend_touched }}" = "true" ]; then
+            note="The frontend is already built and running at http://localhost:3000. Drive it with a throwaway Playwright script under \$QA_SCRATCH_DIR (Chromium and the playwright package are preinstalled under \$QA_TOOLS_DIR). Save screenshots under \$QA_ARTIFACTS_DIR."
+          else
+            note="This PR does not touch the frontend, so backend/API checks are enough."
+          fi
+          {
+            echo "note<<QA_NOTE_EOF"
+            echo "$note"
+            echo "QA_NOTE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # 4. Run the Tester agent against the now-running stack.
+      # -----------------------------------------------------------------------
+      - name: Run Tester agent
+        id: qa
+        if: steps.gatecheck.outputs.run == 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QA_API_KEY: ${{ env.QA_API_KEY }}
+          QA_SCRATCH_DIR: ${{ env.QA_SCRATCH_DIR }}
+          QA_ARTIFACTS_DIR: ${{ env.QA_ARTIFACTS_DIR }}
+          QA_TOOLS_DIR: ${{ env.QA_TOOLS_DIR }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # See agent-review.yml for why `allowed_bots` is needed for our own bot's PRs.
+          allowed_bots: "claude"
+          track_progress: true
+          prompt: |
+            You are the read-only Tester (QA) agent for this repository. Operate
+            exactly as specified in `.claude/agents/tester.md` and check the change
+            against `CLAUDE.md`.
+
+            This is PR #${{ github.event.pull_request.number }} on branch
+            `${{ github.event.pull_request.head.ref }}`. Find the issue it closes
+            (its body contains `Closes #<n>`) and read that issue's acceptance
+            criteria — that is your spec, not the diff. If no issue is linked, use
+            the PR description instead.
+
+            The backend is already running at http://localhost:8000, behind the real
+            x-api-key middleware — use the `$QA_API_KEY` env var as the `x-api-key`
+            header value.
+            ${{ steps.frontend_note.outputs.note }}
+
+            Exercise the feature end-to-end against the issue's acceptance criteria.
+            Post one comment on the PR with what you checked and the result of each
+            check. Write everything in English.
+
+            This check is a MERGE GATE. After verifying, decide a single verdict and
+            make it your FINAL action — run exactly one of these shell commands, and
+            write nothing else to that file:
+              - `echo PASS > qa-verdict.txt`  — every acceptance criterion you could
+                exercise behaves as the issue describes (or there was nothing
+                observable to test).
+              - `echo BLOCK > qa-verdict.txt` — at least one acceptance criterion does
+                not hold up against the running app. When genuinely in doubt after
+                retrying once, choose BLOCK.
+            That verdict file is the ONLY file you may create outside $QA_SCRATCH_DIR
+            and $QA_ARTIFACTS_DIR; never edit repo source.
+          # Same reasoning as agent-implement.yml: the real security boundary is the
+          # ephemeral runner + a `contents: read` token + no web tools, not a Bash
+          # allowlist (which would be moot once curl/psql/node are needed anyway).
+          # Write is required for throwaway Playwright scripts and screenshots.
+          claude_args: |
+            --model claude-sonnet-4-6
+            --max-turns 30
+            --allowedTools "Read,Glob,Grep,Write,TodoWrite,Bash"
+            --disallowedTools "Edit,WebSearch,WebFetch"
+
+      # Fail-closed, same pattern as agent-review.yml: a missing verdict (agent
+      # crashed, timed out, or never wrote the file) blocks the merge.
+      - name: Gate merge on QA verdict
+        id: gate
+        if: always() && steps.gatecheck.outputs.run == 'true'
+        env:
+          AGENT_OUTCOME: ${{ steps.qa.outcome }}
+        run: |
+          if [ ! -f qa-verdict.txt ]; then
+            echo "verdict=ERROR" >> "$GITHUB_OUTPUT"
+            echo "::error::Tester produced no verdict (agent outcome: ${AGENT_OUTCOME}). Blocking merge (fail-closed)."
+            exit 1
+          fi
+          verdict="$(tr -d '[:space:]' < qa-verdict.txt)"
+          echo "verdict=${verdict}" >> "$GITHUB_OUTPUT"
+          if [ "${verdict}" = "PASS" ]; then
+            echo "QA verdict: PASS — merge gate is green."
+            exit 0
+          fi
+          echo "::error::QA verdict: ${verdict} — blocking merge until the findings are addressed."
+          exit 1
+
+      - name: Upload QA evidence
+        if: always() && steps.gatecheck.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-evidence-pr-${{ github.event.pull_request.number }}
+          path: ${{ env.QA_ARTIFACTS_DIR }}
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Notify Slack - QA passed
+        if: ${{ !cancelled() && steps.gate.outputs.verdict == 'PASS' }}
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            :white_check_mark: *QA PASSED* on PR #${{ github.event.pull_request.number }} — the feature works against its acceptance criteria.
+            ${{ github.event.pull_request.html_url }}
+
+      - name: Notify Slack - QA blocked
+        if: ${{ !cancelled() && steps.gate.outputs.verdict == 'BLOCK' }}
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            :no_entry: *QA BLOCKED* PR #${{ github.event.pull_request.number }} — the running app doesn't match the issue's acceptance criteria. See the QA comment.
+            ${{ github.event.pull_request.html_url }}
+
+      - name: Notify Slack - QA errored
+        if: ${{ !cancelled() && steps.gatecheck.outputs.run == 'true' && steps.gate.outputs.verdict != 'PASS' && steps.gate.outputs.verdict != 'BLOCK' }}
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            :x: *Tester ERRORED* on PR #${{ github.event.pull_request.number }} — no verdict produced; merge blocked (fail-closed).
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

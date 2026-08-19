@@ -2,9 +2,9 @@
 
 Design mockups (JPG/PNG screenshots, PDFs, HTML prototypes) that ground a specific
 GitHub issue's UI work. Committed here — not linked externally — so every pipeline
-agent (Planner, Implementer, Reviewer) can `Read` them directly from the checkout;
-none of them have web access (`WebFetch`/`WebSearch` are intentionally disallowed
-for all three — see `CLAUDE.md`).
+agent (Planner, Implementer, Reviewer, Tester) can `Read` them directly from the
+checkout; none of them have internet access (`WebFetch`/`WebSearch` are
+intentionally disallowed for all four — see `CLAUDE.md`).
 
 ## Convention
 
@@ -55,6 +55,10 @@ future enhancement, not built today.)
 
 ## Deliberately out of scope
 
-No auto-download of GitHub issue attachments, no headless-browser rendering, no Git
-LFS, no new tool permissions (`WebFetch`/`WebSearch` stay disallowed for all three
-agents). See `CLAUDE.md` §6.
+No auto-download of GitHub issue attachments, no headless-browser rendering **of
+these files**, no Git LFS, no new tool permissions (`WebFetch`/`WebSearch` stay
+disallowed for all four agents). See `CLAUDE.md` §6.
+
+Note: the Tester agent *does* drive a headless browser (Playwright/Chromium), but
+against the PR's own running frontend on `localhost` to verify shipped behavior —
+not to render these mockup files, which it still just `Read`s like everyone else.

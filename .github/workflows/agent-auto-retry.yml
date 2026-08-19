@@ -1,13 +1,13 @@
 name: Agent - Auto-Retry on Failure
 
-# Fires whenever CI or the Reviewer agent finishes with a failure on a
-# `claude/issue-*` branch. Collects failure context, closes the bad PR,
-# deletes the branch, posts context on the issue, and re-adds the `auto`
-# label so the Implementer agent runs again — up to 3 times. On the 4th
-# failure it stops and marks the issue `needs-human`.
+# Fires whenever CI, the Reviewer agent, or the Tester (QA) agent finishes with a
+# failure on a `claude/issue-*` branch. Collects failure context, closes the bad PR,
+# deletes the branch, posts context on the issue, and re-adds the `auto` label so
+# the Implementer agent runs again — up to 3 times. On the 4th failure it stops and
+# marks the issue `needs-human`.
 on:
   workflow_run:
-    workflows: ["CI", "Agent - Review"]
+    workflows: ["CI", "Agent - Review", "Agent - QA"]
     types: [completed]
 
 permissions:
@@ -117,6 +117,18 @@ jobs:
               --jq '.[].body' 2>&1 \
               | head -150 >> /tmp/ctx.md \
               || echo "(could not retrieve timeline comments)" >> /tmp/ctx.md
+          fi
+
+          if [ "$WORKFLOW_NAME" = "Agent - QA" ]; then
+            echo "**QA agent's findings (from the PR timeline):**" >> /tmp/ctx.md
+            gh api "repos/$REPO/issues/$PR/comments" \
+              --jq '.[].body' 2>&1 \
+              | head -150 >> /tmp/ctx.md \
+              || echo "(could not retrieve QA comments)" >> /tmp/ctx.md
+            echo "" >> /tmp/ctx.md
+            echo "Screenshots/evidence, if any, were uploaded as a workflow artifact" >> /tmp/ctx.md
+            echo "named \`qa-evidence-pr-${PR}\` on this run — see the Actions tab:" >> /tmp/ctx.md
+            echo "${RUN_ID:+https://github.com/$REPO/actions/runs/$RUN_ID}" >> /tmp/ctx.md
           fi
 
           echo "" >> /tmp/ctx.md

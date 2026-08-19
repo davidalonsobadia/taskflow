@@ -126,8 +126,8 @@ frontend/
 When a task should match a specific visual design (a mockup, screenshot, PDF spec,
 or HTML prototype), commit the file(s) into the repo under `design/refs/<key>/`
 rather than only linking an external URL or GitHub's issue-attachment CDN link —
-none of the pipeline agents have web access (`WebFetch`/`WebSearch` are
-intentionally disallowed for Planner, Implementer, and Reviewer), but
+none of the pipeline agents have internet access (`WebFetch`/`WebSearch` are
+intentionally disallowed for Planner, Implementer, Reviewer, and Tester), but
 `actions/checkout@v4` already gives every agent run the full repo, so a committed
 file is directly readable via the `Read` tool (which natively opens PNG/JPG and
 PDF, and reads `.html` as markup/CSS source).
@@ -141,9 +141,14 @@ PDF, and reads `.html` as markup/CSS source).
 - The Implementer treats a linked reference as the source of truth for visual
   detail (layout, spacing, colors, copy, visible states) over its own
   interpretation — see `.claude/agents/implementer.md`.
-- No auto-download of issue attachments, no headless-browser rendering, no Git
-  LFS — deliberately out of scope. Pre-rendering HTML mockups to PNG for pixel
-  fidelity is a possible future enhancement, not built now.
+- No auto-download of issue attachments, no Git LFS — deliberately out of scope.
+  Pre-rendering HTML mockups to PNG for pixel fidelity is a possible future
+  enhancement, not built now.
+- The one exception to "no headless-browser rendering" is the Tester agent (see
+  `.claude/agents/tester.md`): `agent-qa.yml` drives a headless Chromium against
+  the PR's *own* running frontend on `localhost` to verify shipped behavior — this
+  is local functional QA, not fetching or rendering external content, so it does
+  not need (and does not have) `WebFetch`/`WebSearch`.
 
 ## 7. Git & PR conventions (for autonomous agents)
 
