@@ -65,6 +65,32 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # Celery Beat scheduler - dispatches periodic tasks (e.g. the daily recurring
+  # occurrence sweep). Runs as its own process; beat is NOT folded into the worker.
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: taskflow-backend:latest
+    container_name: taskflow-beat
+    command: celery -A app.celery_app.celery beat --loglevel=info
+    env_file:
+      - ./backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/taskflow_db
+    volumes:
+      - ./backend:/app
+      - pip_cache:/root/.cache/pip
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - taskflow-network
+    restart: unless-stopped
+
   # Next.js Frontend Application
   frontend:
     build:
