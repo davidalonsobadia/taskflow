@@ -89,7 +89,8 @@ function ListDetailContent() {
         <main className="flex-1 flex flex-col overflow-hidden">
           <ListHeader
             list={currentList}
-            taskCount={tasks.length}
+            openCount={activeTasks.length}
+            completedCount={completedTasks.length}
             onEdit={() => setShowEditListDialog(true)}
             onDelete={() => setShowDeleteListDialog(true)}
           />
