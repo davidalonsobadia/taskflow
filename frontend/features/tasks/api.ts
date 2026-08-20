@@ -1,5 +1,5 @@
 // Tasks feature API client
-import type { Task } from "@/lib/types"
+import type { Recurrence, Task } from "@/lib/types"
 
 export const tasksApi = {
   async getTasks(listId: string): Promise<{ success: boolean; data?: Task[] }> {
@@ -13,6 +13,7 @@ export const tasksApi = {
     description?: string
     priority?: "low" | "medium" | "high"
     dueDate?: string
+    recurrence?: Recurrence
   }) {
     const response = await fetch("/api/tasks", {
       method: "POST",
@@ -30,6 +31,7 @@ export const tasksApi = {
       completed?: boolean
       priority?: "low" | "medium" | "high"
       dueDate?: string
+      recurrence?: Recurrence
     },
   ) {
     const response = await fetch(`/api/tasks/${id}`, {

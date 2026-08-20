@@ -38,6 +38,9 @@ export interface List {
   updatedAt: string
 }
 
+// Recurrence rule for a task (mirrors the backend RecurrenceEnum)
+export type Recurrence = "none" | "daily" | "weekly" | "monthly"
+
 // Backend API response types (snake_case)
 export interface TaskResponse {
   id: number
@@ -47,6 +50,8 @@ export interface TaskResponse {
   completed: boolean
   priority: "low" | "medium" | "high"
   due_date?: string | null
+  recurrence: Recurrence
+  parent_task_id?: number | null
   created_at: string
   updated_at: string
 }
@@ -60,6 +65,8 @@ export interface Task {
   completed: boolean
   priority: "low" | "medium" | "high"
   dueDate?: string
+  recurrence: Recurrence
+  parentTaskId?: string
   createdAt: string
   updatedAt: string
 }
@@ -102,6 +109,8 @@ export function transformTaskResponse(backendTask: TaskResponse): Task {
     completed: backendTask.completed,
     priority: backendTask.priority,
     dueDate: backendTask.due_date || undefined,
+    recurrence: backendTask.recurrence,
+    parentTaskId: backendTask.parent_task_id != null ? String(backendTask.parent_task_id) : undefined,
     createdAt: backendTask.created_at,
     updatedAt: backendTask.updated_at,
   }

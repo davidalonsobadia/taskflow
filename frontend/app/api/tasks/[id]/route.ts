@@ -68,6 +68,9 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     if (updates.dueDate !== undefined) {
       requestBody.due_date = updates.dueDate
     }
+    if (updates.recurrence !== undefined) {
+      requestBody.recurrence = updates.recurrence
+    }
     if (updates.completed !== undefined) {
       requestBody.completed = updates.completed
     }

@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { tasksService } from "../services/tasks.service"
-import type { Task } from "@/lib/types"
+import type { Recurrence, Task } from "@/lib/types"
 
 export function useTasks(listId: string) {
   const [tasks, setTasks] = useState<Task[]>([])
@@ -34,6 +34,7 @@ export function useTasks(listId: string) {
     description?: string
     priority?: "low" | "medium" | "high"
     dueDate?: string
+    recurrence?: Recurrence
   }) => {
     try {
       const result = await tasksService.createTask({ ...data, listId })
@@ -55,6 +56,7 @@ export function useTasks(listId: string) {
       completed?: boolean
       priority?: "low" | "medium" | "high"
       dueDate?: string
+      recurrence?: Recurrence
     },
   ) => {
     try {

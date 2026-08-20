@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Plus } from "lucide-react"
 import { useTasksContext } from "./context/tasks-context"
+import type { Recurrence } from "@/lib/types"
 
 interface CreateTaskDialogProps {
   listId: string
@@ -36,11 +37,16 @@ export function CreateTaskDialog({ listId, open, onOpenChange, onTaskCreated }: 
   const [description, setDescription] = useState("")
   const [priority, setPriority] = useState<"low" | "medium" | "high">("medium")
   const [dueDate, setDueDate] = useState("")
+  const [recurrence, setRecurrence] = useState<Recurrence>("none")
   const [loading, setLoading] = useState(false)
   const { createTask } = useTasksContext()
 
+  // A recurring task needs a due date to anchor the recurrence rule (mirrors the backend rule).
+  const recurrenceNeedsDueDate = recurrence !== "none" && !dueDate
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (recurrenceNeedsDueDate) return
     setLoading(true)
 
     try {
@@ -49,6 +55,7 @@ export function CreateTaskDialog({ listId, open, onOpenChange, onTaskCreated }: 
         description,
         priority,
         dueDate: dueDate || undefined,
+        recurrence,
       })
       if (result.success) {
         setDialogOpen(false)
@@ -56,6 +63,7 @@ export function CreateTaskDialog({ listId, open, onOpenChange, onTaskCreated }: 
         setDescription("")
         setPriority("medium")
         setDueDate("")
+        setRecurrence("none")
         onTaskCreated?.()
       }
     } catch (error) {
@@ -119,9 +127,26 @@ export function CreateTaskDialog({ listId, open, onOpenChange, onTaskCreated }: 
                 <Input id="dueDate" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
               </div>
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="recurrence">Recurrence</Label>
+              <Select value={recurrence} onValueChange={(value: Recurrence) => setRecurrence(value)}>
+                <SelectTrigger id="recurrence">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                </SelectContent>
+              </Select>
+              {recurrenceNeedsDueDate && (
+                <p className="text-sm text-destructive">A recurring task needs a due date.</p>
+              )}
+            </div>
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={loading}>
+            <Button type="submit" disabled={loading || recurrenceNeedsDueDate}>
               {loading ? "Creating..." : "Create task"}
             </Button>
           </DialogFooter>
