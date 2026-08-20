@@ -194,6 +194,79 @@ def test_double_complete_generates_single_occurrence(
     assert len(occurrences) == 1
 
 
+@pytest.mark.unit
+def test_generate_next_occurrence_task_creates_occurrence(db_session, test_user):
+    """Calling the Celery task directly creates the next occurrence."""
+    from app.domains.tasks.tasks import generate_next_occurrence_task
+
+    task_list = _seed_list(db_session, test_user.id)
+    task = _seed_task(
+        db_session,
+        task_list.id,
+        title="Recurring task",
+        due_date=date(2026, 3, 15),
+        recurrence=RecurrenceEnum.daily,
+    )
+
+    generate_next_occurrence_task(task.id)
+
+    occurrences = (
+        db_session.query(Task).filter(Task.parent_task_id == task.id).all()
+    )
+    assert len(occurrences) == 1
+    assert occurrences[0].due_date == date(2026, 3, 16)
+    assert occurrences[0].completed is False
+
+
+@pytest.mark.unit
+def test_generate_next_occurrence_task_missing_task_is_noop(db_session):
+    """A dispatched task for a deleted/unknown id is a safe no-op."""
+    from app.domains.tasks.tasks import generate_next_occurrence_task
+
+    generate_next_occurrence_task(999_999)
+
+    assert db_session.query(Task).filter(Task.parent_task_id.isnot(None)).count() == 0
+
+
+@pytest.mark.unit
+def test_generate_next_occurrence_task_rolls_back_on_error(
+    db_session, test_user, monkeypatch
+):
+    """A mid-generation failure rolls back, leaving no partial occurrence."""
+    from app.domains.tasks.service import TasksService
+    from app.domains.tasks.tasks import generate_next_occurrence_task
+
+    task_list = _seed_list(db_session, test_user.id)
+    task = _seed_task(
+        db_session,
+        task_list.id,
+        title="Recurring task",
+        due_date=date(2026, 3, 15),
+        recurrence=RecurrenceEnum.daily,
+    )
+
+    def boom(self, source_task):
+        # Stage a row, then fail before the task commits, to prove rollback
+        # discards the partial write.
+        self.db.add(
+            Task(
+                list_id=source_task.list_id,
+                title="ghost",
+                due_date=source_task.due_date,
+                recurrence=RecurrenceEnum.daily,
+                parent_task_id=source_task.id,
+            )
+        )
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(TasksService, "generate_next_occurrence", boom)
+
+    with pytest.raises(RuntimeError):
+        generate_next_occurrence_task(task.id)
+
+    assert db_session.query(Task).filter(Task.title == "ghost").count() == 0
+
+
 @pytest.mark.integration
 def test_occurrence_visible_via_list_endpoint(client, db_session, test_user):
     task_list = _seed_list(db_session, test_user.id)

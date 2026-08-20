@@ -14,6 +14,7 @@ from app.domains.tasks.schemas import (
     TaskResponse,
     TaskUpdate,
 )
+from app.domains.tasks.tasks import generate_next_occurrence_task
 
 
 class TasksService:
@@ -175,14 +176,20 @@ class TasksService:
                 detail="A recurring task requires a due_date"
             )
 
-        # On the transition into completion, generate the next occurrence for a
-        # recurring task. Guarding on the transition keeps this idempotent: a
-        # re-save of an already-completed task spawns nothing.
-        if not was_completed and db_task.completed:
-            self.generate_next_occurrence(db_task)
+        # Detect the false -> true completion transition. Guarding on the
+        # transition keeps generation idempotent: a re-save of an already
+        # completed task spawns nothing.
+        should_generate = not was_completed and db_task.completed
 
         self.db.commit()
         self.db.refresh(db_task)
+
+        # Generate the next occurrence out of the request path via Celery. The
+        # completion is already committed above, so the worker's own session
+        # sees the task. Under TESTING=1 Celery runs eager and this executes
+        # synchronously.
+        if should_generate:
+            generate_next_occurrence_task.delay(db_task.id)
 
         return TaskResponse.model_validate(db_task)
 

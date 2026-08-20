@@ -25,6 +25,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.db import session as db_session_module
 from app.db.base import Base
 from app.db.session import get_db
 from app.domains.auth.models import User
@@ -45,11 +46,21 @@ def db_session():
     )
     Base.metadata.create_all(bind=engine)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    # Rebind the app-level ``SessionLocal`` to this throwaway engine so code that
+    # opens its own session (e.g. the eager Celery task in
+    # ``app.domains.tasks.tasks``) writes to the same in-memory database the test
+    # reads from. ``configure`` mutates the shared sessionmaker in place, so the
+    # module-level ``SessionLocal`` reference the task imported picks this up.
+    original_engine = db_session_module.engine
+    db_session_module.SessionLocal.configure(bind=engine)
+
     session = TestingSessionLocal()
     try:
         yield session
     finally:
         session.close()
+        db_session_module.SessionLocal.configure(bind=original_engine)
         Base.metadata.drop_all(bind=engine)
         engine.dispose()
 
