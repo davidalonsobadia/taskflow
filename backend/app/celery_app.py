@@ -2,6 +2,7 @@ import os
 
 import sentry_sdk
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import settings
 
@@ -32,3 +33,16 @@ else:
 # Auto-discover tasks in domain modules
 # Add task modules here as you create them
 celery.autodiscover_tasks(["app.domains.auth.tasks", "app.domains.tasks.tasks"])
+
+# Periodic (Celery beat) schedule. Runs a daily sweep that generates the next
+# occurrence for recurring tasks whose due_date has passed even if the user never
+# marked them complete. Beat runs as a separate process (see the ``beat`` service
+# in docker-compose.yml); the worker does not enable beat itself. Default cadence
+# is once per day at 01:00 (server/UTC time) — a sensible default that a human can
+# adjust here.
+celery.conf.beat_schedule = {
+    "sweep-due-recurrences-daily": {
+        "task": "tasks.sweep_due_recurrences",
+        "schedule": crontab(hour=1, minute=0),
+    },
+}
