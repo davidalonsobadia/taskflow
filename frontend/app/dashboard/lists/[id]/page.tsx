@@ -83,7 +83,7 @@ function ListDetailContent() {
             </div>
             {list.description && <p className="text-muted-foreground">{list.description}</p>}
             <p className="text-sm text-muted-foreground mt-2">
-              {tasks.length} {tasks.length === 1 ? "task" : "tasks"} total • {completedTasks.length} completed
+              {activeTasks.length} open · {completedTasks.length} completed
             </p>
           </div>
           <CreateTaskDialog listId={listId} />
