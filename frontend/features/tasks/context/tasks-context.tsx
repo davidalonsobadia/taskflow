@@ -2,7 +2,7 @@
 
 import { createContext, useContext, type ReactNode } from "react"
 import { useTasks } from "../hooks/use-tasks"
-import type { Task } from "@/lib/types"
+import type { Recurrence, Task } from "@/lib/types"
 
 interface TasksContextValue {
   tasks: Task[]
@@ -13,6 +13,7 @@ interface TasksContextValue {
     description?: string
     priority?: "low" | "medium" | "high"
     dueDate?: string
+    recurrence?: Recurrence
   }) => Promise<{ success: boolean; error?: string }>
   updateTask: (
     id: string,
@@ -22,6 +23,7 @@ interface TasksContextValue {
       completed?: boolean
       priority?: "low" | "medium" | "high"
       dueDate?: string
+      recurrence?: Recurrence
     }
   ) => Promise<{ success: boolean; error?: string }>
   deleteTask: (id: string) => Promise<{ success: boolean; error?: string }>

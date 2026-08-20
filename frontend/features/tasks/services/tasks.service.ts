@@ -1,6 +1,6 @@
 // Tasks service layer for API calls
 import { config } from "@/lib/config"
-import type { Task } from "@/lib/types"
+import type { Recurrence, Task } from "@/lib/types"
 
 export const tasksService = {
   async getTasks(listId: string): Promise<{ success: boolean; data?: Task[] }> {
@@ -14,6 +14,7 @@ export const tasksService = {
     description?: string
     priority?: "low" | "medium" | "high"
     dueDate?: string
+    recurrence?: Recurrence
   }) {
     const response = await fetch(config.api.endpoints.tasks.base, {
       method: "POST",
@@ -31,6 +32,7 @@ export const tasksService = {
       completed?: boolean
       priority?: "low" | "medium" | "high"
       dueDate?: string
+      recurrence?: Recurrence
     },
   ) {
     const response = await fetch(config.api.endpoints.tasks.byId(id), {

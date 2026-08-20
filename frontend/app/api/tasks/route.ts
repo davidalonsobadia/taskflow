@@ -60,15 +60,16 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { listId, title, description, priority, dueDate } = body
+    const { listId, title, description, priority, dueDate, recurrence } = body
 
-    // Backend expects list_id and due_date (snake_case)
+    // Backend expects list_id and due_date (snake_case); recurrence is already snake_case-safe
     const requestBody = {
       list_id: Number(listId),
       title,
       description: description || null,
       priority: priority || "medium",
       due_date: dueDate || null,
+      recurrence: recurrence || "none",
     }
 
     // Call backend API to create task
