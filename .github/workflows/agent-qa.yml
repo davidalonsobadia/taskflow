@@ -338,9 +338,15 @@ jobs:
           # ephemeral runner + a `contents: read` token + no web tools, not a Bash
           # allowlist (which would be moot once curl/psql/node are needed anyway).
           # Write is required for throwaway Playwright scripts and screenshots.
+          #
+          # max-turns: raised from 30 to 60 after the first live run on a frontend
+          # PR hit error_max_turns at turn 31 (191s, $0.86) without ever reaching the
+          # actual Playwright checks — reading the issue, curling the backend, and
+          # writing/debugging a browser script legitimately costs more than 30 turns.
+          # 60 matches the Implementer's own budget in agent-implement.yml.
           claude_args: |
             --model claude-sonnet-4-6
-            --max-turns 30
+            --max-turns 60
             --allowedTools "Read,Glob,Grep,Write,TodoWrite,Bash"
             --disallowedTools "Edit,WebSearch,WebFetch"
 
