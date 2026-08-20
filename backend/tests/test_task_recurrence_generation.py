@@ -13,6 +13,7 @@ import pytest
 
 from app.domains.lists.models import List as TaskList
 from app.domains.tasks.models import RecurrenceEnum, Task
+from app.domains.tasks.tasks import generate_next_occurrence_task
 
 
 def _seed_list(db_session, user_id):
@@ -214,3 +215,38 @@ def test_occurrence_visible_via_list_endpoint(client, db_session, test_user):
     assert len(occurrences) == 1
     assert occurrences[0]["due_date"] == "2026-09-11"
     assert occurrences[0]["completed"] is False
+
+
+@pytest.mark.unit
+def test_celery_task_generates_occurrence_directly(db_session, test_user):
+    """Calling the Celery task directly creates the next occurrence.
+
+    The task opens its own session from ``SessionLocal`` (rebound to the test
+    engine by the fixtures) and commits the new occurrence itself.
+    """
+    task_list = _seed_list(db_session, test_user.id)
+    task = _seed_task(
+        db_session,
+        task_list.id,
+        title="Direct dispatch",
+        due_date=date(2026, 10, 5),
+        recurrence=RecurrenceEnum.weekly,
+    )
+
+    generate_next_occurrence_task(task.id)
+
+    occurrences = (
+        db_session.query(Task).filter(Task.parent_task_id == task.id).all()
+    )
+    assert len(occurrences) == 1
+    assert occurrences[0].due_date == date(2026, 10, 12)
+    assert occurrences[0].completed is False
+    assert occurrences[0].recurrence == RecurrenceEnum.weekly
+
+
+@pytest.mark.unit
+def test_celery_task_noop_for_missing_task(db_session, test_user):
+    """The task is a safe no-op when the target task does not exist."""
+    generate_next_occurrence_task(999999)
+
+    assert db_session.query(Task).filter(Task.parent_task_id.isnot(None)).count() == 0

@@ -31,4 +31,4 @@ else:
 
 # Auto-discover tasks in domain modules
 # Add task modules here as you create them
-celery.autodiscover_tasks(["app.domains.auth.tasks"])
+celery.autodiscover_tasks(["app.domains.auth.tasks", "app.domains.tasks.tasks"])
