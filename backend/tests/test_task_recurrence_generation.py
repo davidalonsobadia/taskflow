@@ -13,6 +13,7 @@ import pytest
 
 from app.domains.lists.models import List as TaskList
 from app.domains.tasks.models import RecurrenceEnum, Task
+from app.domains.tasks.tasks import generate_next_occurrence_task
 
 
 def _seed_list(db_session, user_id):
@@ -214,3 +215,74 @@ def test_occurrence_visible_via_list_endpoint(client, db_session, test_user):
     assert len(occurrences) == 1
     assert occurrences[0]["due_date"] == "2026-09-11"
     assert occurrences[0]["completed"] is False
+
+
+@pytest.mark.unit
+def test_task_generates_next_occurrence_directly(db_session, test_user):
+    """Calling the Celery task directly creates and commits the next occurrence.
+
+    The task opens its own session from the (rebound) SessionLocal, so the row
+    it commits is visible through the independent test session.
+    """
+    task_list = _seed_list(db_session, test_user.id)
+    task = _seed_task(
+        db_session,
+        task_list.id,
+        title="Directly dispatched",
+        due_date=date(2026, 10, 5),
+        recurrence=RecurrenceEnum.weekly,
+    )
+
+    generate_next_occurrence_task(task.id)
+
+    occurrence = (
+        db_session.query(Task).filter(Task.parent_task_id == task.id).one()
+    )
+    assert occurrence.due_date == date(2026, 10, 12)
+    assert occurrence.completed is False
+    assert occurrence.list_id == task_list.id
+
+
+@pytest.mark.unit
+def test_task_for_missing_id_is_a_safe_noop(db_session, test_user):
+    """Dispatching for an unknown task id creates nothing and does not raise."""
+    generate_next_occurrence_task(999_999)
+
+    assert db_session.query(Task).filter(Task.parent_task_id.isnot(None)).count() == 0
+
+
+@pytest.mark.unit
+def test_task_rolls_back_and_reraises_on_error(db_session, test_user, monkeypatch):
+    """A mid-generation failure rolls back, leaving no partial occurrence."""
+    task_list = _seed_list(db_session, test_user.id)
+    task = _seed_task(
+        db_session,
+        task_list.id,
+        title="Fails midway",
+        due_date=date(2026, 11, 1),
+        recurrence=RecurrenceEnum.daily,
+    )
+
+    from app.domains.tasks import service as service_module
+
+    def boom(self, task):
+        # Stage the occurrence, then fail before the task commits.
+        occurrence = Task(
+            title=task.title,
+            list_id=task.list_id,
+            due_date=task.due_date,
+            recurrence=task.recurrence,
+            parent_task_id=task.id,
+        )
+        self.db.add(occurrence)
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        service_module.TasksService, "generate_next_occurrence", boom
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        generate_next_occurrence_task(task.id)
+
+    # The rollback in the task must have discarded the staged occurrence.
+    assert db_session.query(Task).filter(Task.parent_task_id == task.id).count() == 0

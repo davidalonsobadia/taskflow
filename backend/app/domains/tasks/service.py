@@ -14,6 +14,7 @@ from app.domains.tasks.schemas import (
     TaskResponse,
     TaskUpdate,
 )
+from app.domains.tasks.tasks import generate_next_occurrence_task
 
 
 class TasksService:
@@ -177,11 +178,20 @@ class TasksService:
 
         # On the transition into completion, generate the next occurrence for a
         # recurring task. Guarding on the transition keeps this idempotent: a
-        # re-save of an already-completed task spawns nothing.
-        if not was_completed and db_task.completed:
-            self.generate_next_occurrence(db_task)
+        # re-save of an already-completed task spawns nothing. Capture the flag
+        # and id before commit so they survive attribute expiration.
+        should_generate = not was_completed and db_task.completed
+        task_id = db_task.id
 
         self.db.commit()
+
+        # Dispatch generation only after the completion is committed, so the
+        # worker's own session sees the persisted row. The task is a safe no-op
+        # for non-recurring tasks (generate_next_occurrence returns None). Under
+        # TESTING=1 Celery runs eager, so this executes synchronously.
+        if should_generate:
+            generate_next_occurrence_task.delay(task_id)
+
         self.db.refresh(db_task)
 
         return TaskResponse.model_validate(db_task)
