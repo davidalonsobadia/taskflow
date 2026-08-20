@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { EditTaskDialog } from "./edit-task-dialog"
 import { DeleteTaskDialog } from "./delete-task-dialog"
 import { useTasksContext } from "./context/tasks-context"
-import { Calendar, Flag } from "lucide-react"
+import { Calendar, Flag, Repeat } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useState } from "react"
 
@@ -58,6 +58,12 @@ export function TaskItem({ task }: TaskItemProps) {
                   <Badge variant="outline">
                     <Calendar className="h-3 w-3 mr-1" />
                     {formatDate(task.dueDate)}
+                  </Badge>
+                )}
+                {task.recurrence !== "none" && (
+                  <Badge variant="outline">
+                    <Repeat className="h-3 w-3 mr-1" />
+                    {task.recurrence.charAt(0).toUpperCase() + task.recurrence.slice(1)}
                   </Badge>
                 )}
               </div>
