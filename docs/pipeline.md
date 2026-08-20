@@ -36,31 +36,48 @@ Human: merge PR #2 (one-time kick-off)
               │
         ┌─────┴──────┐
         │            │
-      PASS         FAIL
-        │            │
-        ▼            ▼
-   auto-merge    auto-retry
-   (squash)      (agent-auto-
-        │         retry.yml)
-        │            │
-        │     ┌──────┴───────┐
-        │     │              │
-        │  retry < 3     retry = 3
-        │     │              │
-        │     │          needs-human
-        │     │          label added
-        │     │          → pipeline
-        │     │            pauses
-        │     ▼
-        │  close PR, delete branch,
-        │  post failure context on issue,
-        │  re-add `auto` → implementer re-runs
+      PASS         FAIL ──────────────────────────────┐
+        │                                              │
+        ▼                                              │
+   ┌─────────────────────┐                             │
+   │     Agent - QA      │  boots Postgres+Redis+API   │
+   │  (agent-qa.yml /     │  (+frontend if touched),    │
+   │   Sonnet)            │  runs the Tester agent      │
+   │  PASS or BLOCK       │  end-to-end against the     │
+   │  verdict             │  issue's acceptance criteria│
+   └──────────┬───────────┘                             │
+        ┌─────┴──────┐                                  │
+        │            │                                  │
+      PASS         FAIL ─────────────────────────────┐  │
+        │                                             │  │
+        ▼                                             ▼  ▼
+   auto-merge                                   auto-retry
+   (squash)                                     (agent-auto-
+        │                                        retry.yml)
+        │                                             │
+        │                                      ┌──────┴───────┐
+        │                                      │              │
+        │                                  retry < 3      retry = 3
+        │                                      │              │
+        │                                      │          needs-human
+        │                                      │          label added
+        │                                      │          → pipeline
+        │                                      │            pauses
+        │                                      ▼
+        │                               close PR, delete branch,
+        │                               post failure context on issue,
+        │                               re-add `auto` → implementer re-runs
         │
         ▼
    advance-queue fires
    → next issue labeled `auto`
    → cycle repeats
 ```
+
+Note: `Agent - QA` polls the `review` check-run on the same commit and skips its own
+heavy steps (booting the stack) unless Review already concluded `success` — booting
+Postgres/Redis/the API/the frontend costs several minutes, and there's nothing for QA
+to add if Review is already going to block the merge on its own.
 
 ---
 
@@ -71,7 +88,8 @@ Human: merge PR #2 (one-time kick-off)
 | `agent-implement.yml` | `auto` label added to issue | Implements the issue, opens PR, arms auto-merge |
 | `ci.yml` | PR opened / updated | Lint, migrations, tests, frontend build |
 | `agent-review.yml` | PR opened / updated | Read-only code review — emits PASS or BLOCK |
-| `agent-auto-retry.yml` | CI or Review workflow fails | Closes PR, posts failure context, re-triggers implementer |
+| `agent-qa.yml` | PR opened / updated (after Review passes) | Boots the real stack and exercises the feature end-to-end — emits PASS or BLOCK |
+| `agent-auto-retry.yml` | CI, Review, or QA workflow fails | Closes PR, posts failure context, re-triggers implementer |
 | `agent-advance-queue.yml` | `claude/issue-*` PR merged | Labels the next open issue `auto` |
 | `notify-merge.yml` | Any PR merged | Slack notification |
 
@@ -85,6 +103,7 @@ Human: merge PR #2 (one-time kick-off)
 | `retry-1` / `retry-2` / `retry-3` | How many auto-retry attempts have been made |
 | `needs-human` | Max retries (3) exceeded — pipeline paused, human action required |
 | `no-auto` | Issue is excluded from the automated queue |
+| `no-qa` | Issue/PR is excluded from the QA (Tester) stage — Review still runs |
 | `epic` | Tracking issue — excluded from the automated queue |
 
 ---
@@ -127,6 +146,7 @@ GitHub **silently suppresses** workflow triggers caused by the built-in `GITHUB_
   - `backend` (from `ci.yml`)
   - `frontend` (from `ci.yml`)
   - `review` (from `agent-review.yml`)
+  - `qa` (from `agent-qa.yml`)
 
 ### 3. Issue labels
 
@@ -140,6 +160,7 @@ Create these labels in **Issues → Labels** (the workflows expect them to exist
 | `retry-3` | `#d93f0b` (red) |
 | `needs-human` | `#b60205` (dark red) |
 | `no-auto` | `#cccccc` (grey) |
+| `no-qa` | `#c5def5` (light blue) |
 | `epic` | `#7057ff` (purple) |
 
 ---
@@ -179,6 +200,16 @@ re-add `auto` manually whenever you want to process it.
 
 ---
 
+## Excluding a PR from QA
+
+Add the `no-qa` label to the issue (or its PR — they share the same label API) if the
+change has nothing observable to run — a docs-only change, a config tweak, a pure
+refactor with no behavior change. `Agent - QA`'s required check still reports (so it
+doesn't hang the merge), it just skips booting the stack and running the Tester agent.
+Review still runs regardless.
+
+---
+
 ## Architecture notes
 
 - **Concurrency**: `agent-auto-retry.yml` uses a concurrency group keyed on the branch
@@ -191,5 +222,14 @@ re-add `auto` manually whenever you want to process it.
   On failure, the retry workflow closes the PR and deletes the branch before re-triggering,
   so the implementer always starts from a clean branch off the latest `main`.
 - **Auto-merge arm**: The implementer runs `gh pr merge --auto --squash --delete-branch`
-  after opening the PR. This arms auto-merge but does not merge — CI and the Reviewer
-  still have to pass. The branch is deleted by GitHub on merge.
+  after opening the PR. This arms auto-merge but does not merge — CI, the Reviewer, and
+  QA still have to pass. The branch is deleted by GitHub on merge.
+- **Why `agent-qa.yml` polls instead of using `workflow_run`**: a workflow triggered by
+  `workflow_run` executes against the default branch and does not automatically appear
+  as a status check on the PR that triggered the upstream workflow — attaching it would
+  need extra Checks-API plumbing. `agent-qa.yml` instead triggers directly on the same
+  `pull_request` events as `agent-review.yml` (so it naturally attaches as the `qa`
+  check) and polls the `review` check-run on the same commit via the Checks API to get
+  the sequencing without that plumbing. `agent-auto-retry.yml` still uses `workflow_run`
+  for its own trigger, which is fine there — that workflow only *reacts* to a completed
+  run, it never needs to appear as a check itself.
