@@ -7,12 +7,13 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 
 interface ListHeaderProps {
   list: List
-  taskCount: number
+  openCount: number
+  completedCount: number
   onEdit: () => void
   onDelete: () => void
 }
 
-export function ListHeader({ list, taskCount, onEdit, onDelete }: ListHeaderProps) {
+export function ListHeader({ list, openCount, completedCount, onEdit, onDelete }: ListHeaderProps) {
   return (
     <div className="border-b bg-card p-6">
       <div className="flex items-start justify-between">
@@ -23,7 +24,7 @@ export function ListHeader({ list, taskCount, onEdit, onDelete }: ListHeaderProp
           </div>
           {list.description && <p className="text-muted-foreground">{list.description}</p>}
           <p className="text-sm text-muted-foreground mt-2">
-            {taskCount} {taskCount === 1 ? "task" : "tasks"}
+            {openCount} open · {completedCount} completed
           </p>
         </div>
 
