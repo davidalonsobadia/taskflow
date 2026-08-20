@@ -1,4 +1,5 @@
-from datetime import date
+import calendar
+from datetime import date, timedelta
 from typing import List as ListType
 from typing import Optional
 
@@ -158,6 +159,12 @@ class TasksService:
                 detail="Task not found"
             )
 
+        # Capture the completion state before the update so we can detect a
+        # false -> true transition. Only that transition spawns a new
+        # occurrence; re-saving an already-completed task must not (idempotent
+        # per completion event).
+        was_completed = bool(db_task.completed)
+
         # Update only provided fields
         update_data = task_data.model_dump(exclude_unset=True)
         for field, value in update_data.items():
@@ -171,10 +178,73 @@ class TasksService:
                 detail="A recurring task requires a due_date"
             )
 
+        # On the transition to completed, generate the next occurrence for a
+        # recurring task. The new occurrence is staged in this session and
+        # committed atomically with the task update below.
+        if not was_completed and db_task.completed:
+            self.generate_next_occurrence(db_task)
+
         self.db.commit()
         self.db.refresh(db_task)
 
         return TaskResponse.model_validate(db_task)
+
+    def generate_next_occurrence(self, task: Task) -> Optional[Task]:
+        """
+        Given a recurring task with a due_date, create the next occurrence:
+        a new task in the same list that copies ``title``, ``description``,
+        ``priority`` and ``recurrence``, with ``completed=False``, its
+        ``due_date`` advanced by the recurrence interval, and
+        ``parent_task_id`` pointing at the source task.
+
+        Returns the new task, or ``None`` if the task is not recurring or has
+        no due_date to anchor the rule.
+
+        The new occurrence is added to the session but NOT committed — the
+        caller is responsible for committing (``update_task`` does so in the
+        same transaction as the completion update).
+        """
+        if task.recurrence == RecurrenceEnum.none or task.due_date is None:
+            return None
+
+        occurrence = Task(
+            title=task.title,
+            description=task.description,
+            list_id=task.list_id,
+            priority=task.priority,
+            due_date=self._advance_due_date(task.due_date, task.recurrence),
+            recurrence=task.recurrence,
+            completed=False,
+            parent_task_id=task.id,
+        )
+        self.db.add(occurrence)
+        return occurrence
+
+    @staticmethod
+    def _advance_due_date(due_date: date, recurrence: RecurrenceEnum) -> date:
+        """Advance a due_date by one recurrence interval."""
+        if recurrence == RecurrenceEnum.daily:
+            return due_date + timedelta(days=1)
+        if recurrence == RecurrenceEnum.weekly:
+            return due_date + timedelta(days=7)
+        if recurrence == RecurrenceEnum.monthly:
+            return TasksService._add_one_month(due_date)
+        return due_date
+
+    @staticmethod
+    def _add_one_month(due_date: date) -> date:
+        """
+        Add one calendar month to ``due_date``.
+
+        When the target month has fewer days than the source day-of-month, the
+        result is clamped to the last day of the target month (e.g.
+        Jan 31 -> Feb 28, or Feb 29 in a leap year). This avoids introducing a
+        third-party dependency (``python-dateutil``) for a single, simple rule.
+        """
+        year = due_date.year + (due_date.month // 12)
+        month = due_date.month % 12 + 1
+        last_day = calendar.monthrange(year, month)[1]
+        return date(year, month, min(due_date.day, last_day))
 
     def delete_task(self, task_id: int, user_id: int) -> None:
         """
