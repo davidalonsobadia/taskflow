@@ -284,14 +284,32 @@ docker-compose up -d
 
 ## 🚀 Production Deployment
 
-For production deployment:
+**The machine comes first, and it is not this repo's job.** Every Koalvia server is
+bootstrapped from [`Koalvia/infra`](https://github.com/Koalvia/infra): `host/bootstrap.sh`
+installs Docker, a non-root `deploy` user with key-only SSH, fail2ban, unattended security
+upgrades, a swapfile and the Beszel agent that reports to https://beszel.koalvia.com. Do not
+solve any of that per project, and do not copy the script here: it has one home, and two
+copies are worse than none.
 
-1. Set `NODE_ENV=production` in `frontend/.env`
-2. Use production build target: `FRONTEND_BUILD_TARGET=runner`
-3. Remove volume mounts for source code
-4. Use environment-specific secrets
-5. Configure proper CORS origins
-6. Set up SSL/TLS (consider using Caddy profile)
+On top of a bootstrapped machine, a project deploys like this:
+
+- GitHub Actions builds the `backend` and `frontend` images for `linux/amd64` and pushes them
+  to GHCR tagged `sha-<7>`. The server pulls; it never builds.
+- The deploy connects over SSH as `deploy` and runs `docker compose` with
+  `docker-compose.prod.yml`, which is self-contained: images from GHCR, no `build:`, no source
+  mounts.
+- Secrets live in `.env` files on the server, never in the repo and never in CI. The deploy
+  fails fast when one is missing.
+- The stack brings its own Caddy, owning ports 80 and 443 of the host and getting its
+  certificate from Let's Encrypt. Two exceptions: a machine hosting several stacks, where one
+  entry Caddy owns the ports and forwards over a shared external `proxy` network, and a machine
+  behind someone else's reverse proxy, where Caddy serves plain HTTP on port 80 and trusts the
+  proxy's `X-Forwarded-*`.
+
+What this template does **not** ship yet: `docker-compose.prod.yml` has no Caddy service, and
+there is no deploy workflow. Until it does, copy both from a project where they already work
+(`Craze-GmbH/craze-commercial-platform`: `deploy.yml`, `docker-compose.prod.yml` and `caddy/`)
+instead of inventing a fourth shape.
 
 ## 📝 License
 
